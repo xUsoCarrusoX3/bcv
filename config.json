@@ -5,12 +5,22 @@
   "UMBRAL_ESTABILIDAD": 10,
   "LIMITE_ERRORES_FUENTE": 30,
   "URL_BINANCE": "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
-  "BINANCE_PARAMS": {
+  "BINANCE_BUY": {
     "asset": "USDT",
     "fiat": "VES",
     "page": 1,
-    "rows": 10,
+    "rows": 5,
     "tradeType": "BUY",
+    "merchantCheck": false,
+    "payTypes": [],
+    "publisherType": null
+  },
+  "BINANCE_SELL": {
+    "asset": "USDT",
+    "fiat": "VES",
+    "page": 1,
+    "rows": 5,
+    "tradeType": "SELL",
     "merchantCheck": false,
     "payTypes": [],
     "publisherType": null

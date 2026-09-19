@@ -79,7 +79,8 @@ function leerDB() {
         const init = {
             tasaActual: 0, tasaAnterior: 0,
             euroActual: 0, euroAnterior: 0,
-            binanceActual: 0, binanceAnterior: 0,
+            binanceCompra: 0, binanceCompraAnt: 0,
+            binanceVenta: 0, binanceVentaAnt: 0,
             fechaActualizado: 'N/A', ultimaActualizacion: 'N/A', grupos: {}
         };
         fs.writeFileSync(BCV_FILE, JSON.stringify(init, null, 2));
@@ -91,7 +92,8 @@ function leerDB() {
 function guardarDB(db) {
     db.tasaActual = r2(db.tasaActual);
     db.euroActual = r2(db.euroActual);
-    db.binanceActual = r2(db.binanceActual || 0);
+    db.binanceCompra = r2(db.binanceCompra || 0);
+    db.binanceVenta = r2(db.binanceVenta || 0);
     fs.writeFileSync(BCV_FILE, JSON.stringify(db, null, 2));
 }
 
@@ -103,23 +105,6 @@ function gestionarHistorial(usd, eur) {
     historial.push({ usd: r2(usd), eur: r2(eur), fecha: new Date().toLocaleString('es-VE'), timestamp: Date.now() });
     if (historial.length > 30) historial.shift();
     fs.writeFileSync(HISTORIAL_FILE, JSON.stringify(historial, null, 2));
-}
-
-function calcularPrediccion() {
-    if (!fs.existsSync(HISTORIAL_FILE)) return null;
-    let data;
-    try { data = JSON.parse(fs.readFileSync(HISTORIAL_FILE, 'utf-8')); } catch (e) { return null; }
-    if (data.length < 3) return null;
-
-    const preciosUSD = data.map(d => d.usd);
-    const n = preciosUSD.length;
-    const ultimaDif = preciosUSD[n - 1] - preciosUSD[n - 2];
-    let sumaDiferencias = 0;
-    for (let i = 1; i < n; i++) sumaDiferencias += (preciosUSD[i] - preciosUSD[i - 1]);
-    const promedioDif = sumaDiferencias / (n - 1);
-    const prediccionUSD = preciosUSD[n - 1] + ((promedioDif * 0.7) + (ultimaDif * 0.3));
-
-    return { prediccionUSD, promedioUSD: preciosUSD.reduce((a, b) => a + b, 0) / n };
 }
 
 // ==========================================
@@ -164,15 +149,19 @@ const loopBCV = async () => {
             });
             const resultBCV = executeRemote('logic', responseBCV.data, config);
 
-            // 2. OBTENER BINANCE
-            let resultBinance = null;
+            // 2. OBTENER BINANCE DUAL (OPCIONAL)
+            let resCompra = null, resVenta = null;
             try {
-                const responseBinance = await axios.post(config.URL_BINANCE, config.BINANCE_PARAMS, { timeout: 15000 });
-                resultBinance = executeRemote('binance', responseBinance.data, config);
-            } catch (e) { console.log(chalk.yellow(`  ⚠️ Error consultando Binance P2P: ${e.message}`)); }
+                const [bBuy, bSell] = await Promise.all([
+                    axios.post(config.URL_BINANCE, config.BINANCE_BUY, { timeout: 15000 }).catch(() => null),
+                    axios.post(config.URL_BINANCE, config.BINANCE_SELL, { timeout: 15000 }).catch(() => null)
+                ]);
+                if (bBuy) resCompra = executeRemote('binance', bBuy.data, config);
+                if (bSell) resVenta = executeRemote('binance', bSell.data, config);
+            } catch (e) {}
 
             let db = leerDB();
-            let huboCambio = false;
+            let huboCambioBCV = false;
 
             // Procesar BCV
             if (resultBCV && !resultBCV.error) {
@@ -183,23 +172,25 @@ const loopBCV = async () => {
                     db.tasaActual = usdWeb; db.euroActual = eurWeb;
                     db.fechaActualizado = new Date().toLocaleString('es-VE');
                     gestionarHistorial(db.tasaActual, db.euroActual);
-                    huboCambio = true;
+                    huboCambioBCV = true;
                 }
             }
 
-            // Procesar Binance
-            if (resultBinance && !resultBinance.error) {
-                const binanceWeb = r2(resultBinance.price);
-                if (binanceWeb !== r2(db.binanceActual)) {
-                    db.binanceAnterior = db.binanceActual;
-                    db.binanceActual = binanceWeb;
-                    huboCambio = true;
-                }
+            // Procesar Binance (Solo actualiza DB)
+            if (resCompra && !resCompra.error) {
+                const cWeb = r2(resCompra.price);
+                if (cWeb !== r2(db.binanceCompra)) { db.binanceCompraAnt = db.binanceCompra; db.binanceCompra = cWeb; }
+            }
+            if (resVenta && !resVenta.error) {
+                const vWeb = r2(resVenta.price);
+                if (vWeb !== r2(db.binanceVenta)) { db.binanceVentaAnt = db.binanceVenta; db.binanceVenta = vWeb; }
             }
 
-            if (huboCambio) {
+            if (huboCambioBCV) {
                 guardarDB(db);
                 if (global.conn) anunciarCambio(db);
+            } else {
+                guardarDB(db);
             }
             
             let dbFinal = leerDB();
@@ -214,14 +205,19 @@ const loopBCV = async () => {
 };
 
 async function anunciarCambio(db) {
-    const stats = calcularPrediccion();
     for (let id in db.grupos) {
-        let msg = `📢 *¡Tasas Actualizadas!*\n\n`;
-        msg += `💵 *BCV:* ${f(db.tasaAnterior)} ➡️ *${f(db.tasaActual)} Bs*\n`;
-        msg += `🔶 *Binance:* ${f(db.binanceAnterior)} ➡️ *${f(db.binanceActual)} Bs*\n`;
+        let msg = `📢 *¡Tasa BCV actualizada!*\n\n`;
+        msg += `💵 *Dólar:* ${f(db.tasaAnterior)} ➡️ *${f(db.tasaActual)} Bs*\n`;
         msg += `💶 *Euro:* ${f(db.euroAnterior)} ➡️ *${f(db.euroActual)} Bs*\n\n`;
+
+        if (db.binanceCompra > 0 || db.binanceVenta > 0) {
+            msg += `🔶 *Binance (Ref):*\n`;
+            if (db.binanceCompra > 0) msg += `🛒 Compra: ${f(db.binanceCompra)} Bs\n`;
+            if (db.binanceVenta > 0) msg += `💰 Venta: ${f(db.binanceVenta)} Bs\n`;
+            msg += `\n`;
+        }
+
         msg += `🕒 Fecha: ${db.fechaActualizado}`;
-        if (stats) msg += `\n📊 *Predicción:* ~${f(stats.prediccionUSD)} Bs`;
         await global.conn.sendMessage(id, { text: msg }).catch(() => {});
     }
 }
@@ -239,17 +235,26 @@ handler.run = async (m, conn) => {
     let db = leerDB();
 
     const generarMensajeBCV = () => {
-        const stats = calcularPrediccion();
         const dU = db.tasaActual > db.tasaAnterior ? '🔼' : (db.tasaActual < db.tasaAnterior ? '🔽' : '🔄');
-        const dB = db.binanceActual > db.binanceAnterior ? '🔼' : (db.binanceActual < db.binanceAnterior ? '🔽' : '🔄');
         const dE = db.euroActual > db.euroAnterior ? '🔼' : (db.euroActual < db.euroAnterior ? '🔽' : '🔄');
 
         let txt = `📊 *MONITOR DE TASAS (VES)*\n\n`;
         txt += `💵 *BCV:* ${f(db.tasaActual)} Bs ${dU}\n`;
-        txt += `🔶 *Binance:* ${f(db.binanceActual)} Bs ${dB}\n`;
         txt += `💶 *Euro:* ${f(db.euroActual)} Bs ${dE}\n\n`;
 
-        if (stats) txt += `🔎 *Análisis BCV:*\n🔄 Promedio: ${f(stats.promedioUSD)} Bs\n📈 Predicción: ~${f(stats.prediccionUSD)} Bs\n\n`;
+        if (db.binanceCompra > 0 || db.binanceVenta > 0) {
+            txt += `🔶 *Binance P2P:*\n`;
+            if (db.binanceCompra > 0) {
+                const dBC = db.binanceCompra > db.binanceCompraAnt ? '🔼' : (db.binanceCompra < db.binanceCompraAnt ? '🔽' : '🔄');
+                txt += `🛒 Compra: ${f(db.binanceCompra)} Bs ${dBC}\n`;
+            }
+            if (db.binanceVenta > 0) {
+                const dBV = db.binanceVenta > db.binanceVentaAnt ? '🔼' : (db.binanceVenta < db.binanceVentaAnt ? '🔽' : '🔄');
+                txt += `💰 Venta: ${f(db.binanceVenta)} Bs ${dBV}\n`;
+            }
+            txt += `\n`;
+        }
+
         txt += `🕒 *Fecha Valor:* ${db.fechaActualizado}\n🔗 *Última Revisión:* ${db.ultimaActualizacion}`;
         return txt;
     };
@@ -257,6 +262,15 @@ handler.run = async (m, conn) => {
     switch (command) {
         case 'bcv':
             m.reply(generarMensajeBCV());
+            break;
+
+        case 'binance':
+            if (db.binanceCompra === 0 && db.binanceVenta === 0) return m.reply('❌ Datos de Binance no disponibles.');
+            let bTxt = `🔶 *TASAS BINANCE P2P*\n\n`;
+            bTxt += `🛒 *Compra:* ${f(db.binanceCompra)} Bs\n`;
+            bTxt += `💰 *Venta:* ${f(db.binanceVenta)} Bs\n\n`;
+            bTxt += `🔗 *Última Revisión:* ${db.ultimaActualizacion}`;
+            m.reply(bTxt);
             break;
 
         case 'bcvhtml':
@@ -291,19 +305,40 @@ handler.run = async (m, conn) => {
         case 'bcvadolar':
         case 'bcvabinance':
         case 'bcvaeuro':
+        case 'dolarabinance':
+        case 'binanceadolar':
             const monto = parseFloat(args[0]?.replace(',', '.'));
             if (isNaN(monto) || monto <= 0) return m.reply(`💡 Uso: *${prefix}${command} [cantidad]*`);
             let res, t, sym;
+
+            // Lógica de Tasas
             if (command === 'dolarabcv') { res = monto * db.tasaActual; t = db.tasaActual; sym = 'Bs'; }
-            if (command === 'binanceabcv') { res = monto * db.binanceActual; t = db.binanceActual; sym = 'Bs'; }
+            if (command === 'binanceabcv') { res = monto * db.binanceVenta; t = db.binanceVenta; sym = 'Bs'; } // Vendes USDT -> Recibes VES
             if (command === 'euroabcv') { res = monto * db.euroActual; t = db.euroActual; sym = 'Bs'; }
+
             if (command === 'bcvadolar') { res = monto / db.tasaActual; t = db.tasaActual; sym = 'USD'; }
-            if (command === 'bcvabinance') { res = monto / db.binanceActual; t = db.binanceActual; sym = 'USDT'; }
+            if (command === 'bcvabinance') { res = monto / db.binanceCompra; t = db.binanceCompra; sym = 'USDT'; } // Das VES -> Compras USDT
             if (command === 'bcvaeuro') { res = monto / db.euroActual; t = db.euroActual; sym = 'EUR'; }
-            m.reply(`📊 *Conversión:*\n💰 Resultado: *${f(res)} ${sym}*\n📈 Tasa: *${f(t)} Bs*`);
+
+            if (command === 'dolarabinance') {
+                // USD BCV -> VES -> USDT Binance
+                const ves = monto * db.tasaActual;
+                res = ves / db.binanceCompra;
+                t = db.binanceCompra;
+                sym = 'USDT';
+            }
+            if (command === 'binanceadolar') {
+                // USDT Binance -> VES -> USD BCV
+                const ves = monto * db.binanceVenta;
+                res = ves / db.tasaActual;
+                t = db.tasaActual;
+                sym = 'USD';
+            }
+
+            m.reply(`📊 *Conversión:*\n💰 Resultado: *${f(res)} ${sym}*\n📈 Tasa Ref: *${f(t)} Bs*`);
             break;
     }
 };
 
-handler.command = ['bcv', 'setbcv', 'unsetbcv', 'dolarabcv', 'binanceabcv', 'euroabcv', 'bcvhtml', 'bcvadolar', 'bcvabinance', 'bcvaeuro'];
+handler.command = ['bcv', 'binance', 'bcvhtml', 'setbcv', 'unsetbcv', 'dolarabcv', 'binanceabcv', 'euroabcv', 'bcvadolar', 'bcvabinance', 'bcvaeuro', 'dolarabinance', 'binanceadolar'];
 module.exports = handler;
