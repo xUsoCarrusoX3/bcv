@@ -3,5 +3,16 @@
   "LINEA_USD": 774,
   "LINEA_EUR": 730,
   "UMBRAL_ESTABILIDAD": 10,
-  "LIMITE_ERRORES_FUENTE": 30
+  "LIMITE_ERRORES_FUENTE": 30,
+  "URL_BINANCE": "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
+  "BINANCE_PARAMS": {
+    "asset": "USDT",
+    "fiat": "VES",
+    "page": 1,
+    "rows": 10,
+    "tradeType": "BUY",
+    "merchantCheck": false,
+    "payTypes": [],
+    "publisherType": null
+  }
 }
