@@ -1,0 +1,7 @@
+{
+  "URL_BCV": "https://www.bcv.org.ve/",
+  "LINEA_USD": 774,
+  "LINEA_EUR": 730,
+  "UMBRAL_ESTABILIDAD": 10,
+  "LIMITE_ERRORES_FUENTE": 30
+}
