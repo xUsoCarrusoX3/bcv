@@ -1,7 +1,7 @@
 {
   "URL_BCV": "https://www.bcv.org.ve/",
-  "LINEA_USD": 774,
-  "LINEA_EUR": 730,
+  "LINEA_USD": 807,
+  "LINEA_EUR": 763,
   "UMBRAL_ESTABILIDAD": 10,
   "LIMITE_ERRORES_FUENTE": 30,
   "URL_BINANCE": "https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search",
